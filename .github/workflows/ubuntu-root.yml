@@ -1,1 +1,70 @@
+name: Ubuntu Cloud SSH
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 43200
+
+    steps:
+      - name: 1. Install SSH Server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server curl
+          sudo systemctl enable --now ssh
+
+      - name: 2. Configure Root Password
+        env:
+          ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
+        run: |
+          if [ -z "$ROOT_PASSWORD" ]; then
+            echo "ROOT_PASSWORD secret is missing"
+            exit 1
+          fi
+
+          echo "root:${ROOT_PASSWORD}" | sudo chpasswd
+
+      - name: 3. Configure SSH Authentication
+        run: |
+          sudo mkdir -p /etc/ssh/sshd_config.d
+
+          sudo tee /etc/ssh/sshd_config.d/99-cloud-root.conf > /dev/null <<'EOF'
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          EOF
+
+          sudo sshd -t
+          sudo systemctl restart ssh
+
+      - name: 4. Install and Connect Tailscale
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          if [ -z "$TAILSCALE_AUTHKEY" ]; then
+            echo "TAILSCALE_AUTHKEY secret is missing"
+            exit 1
+          fi
+
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+          sudo tailscale up \
+            --auth-key="$TAILSCALE_AUTHKEY" \
+            --hostname="github-ubuntu-root"
+
+          echo "================================"
+          echo "Ubuntu SSH is configured"
+          echo "Username: root"
+          echo "Tailscale IP:"
+          sudo tailscale ip -4
+          echo "================================"
+
+      - name: 5. Keep Runner Active
+        run: |
+          for i in $(seq 1 43200); do
+            echo "Runner active: $i/43200 minutes"
+            sleep 60
+          done
